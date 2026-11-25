@@ -1,0 +1,17 @@
+# Veri
+data/
+*.csv
+*.parquet
+*.zip
+
+# Python / Jupyter
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+*.joblib
+*.pkl
+
+# OS / editör
+.DS_Store
+.vscode/
+.idea/
