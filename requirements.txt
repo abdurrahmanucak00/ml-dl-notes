@@ -8,4 +8,8 @@ lightgbm
 xgboost
 catboost
 shap
+nltk
+wordcloud
+langdetect
+deep-translator
 jupyterlab

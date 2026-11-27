@@ -7,11 +7,21 @@ data/
 # Python / Jupyter
 __pycache__/
 .ipynb_checkpoints/
+*.ipynb_checkpoints
 .venv/
+venv/
+env/
 *.joblib
 *.pkl
+notebook_original.ipynb
+indirilenler/
+
+# Gizli değişkenler
+.env
+*.env
 
 # OS / editör
 .DS_Store
+Thumbs.db
 .vscode/
 .idea/
