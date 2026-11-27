@@ -1,41 +1,55 @@
 # 01 · Problem Tanımı, Metrik ve Baseline
 
-Koda başlamadan önce problemi optimize edilebilir bir şeye çevir.
+**Neden bu adım var?**
+Başarıyı neyle ölçeceğini bilmeden model eğitmek, hedef tahtasını görmeden ok atmaya benzer. Özellikle dengesiz verilerde yanlış metrik (örneğin yalnızca Accuracy) seçmek, aslında hiçbir şey öğrenmeyen bir modeli "çok başarılı" sanmana yol açar.
 
-## 1. Problem tipi
+## Temel (Önce Bunu Uygula)
 
-- Regresyon, ikili / çok sınıflı sınıflandırma, metin sınıflandırma, görüntü sınıflandırma?
-- Tahmin anında elimde hangi bilgi olacak? (Sızıntı kontrolünün ilk adımı, bkz. [03](03_eda_and_leakage.md))
+### 1. Problem tipini ve tahmin anını netleştir
+- **Ne tahmin ediyorum?** Sayısal değer (regresyon), iki sınıf (ikili sınıflandırma), 3+ sınıf (çok sınıflı) veya metin sınıflandırma.
+- **Tahmin anında elimde hangi bilgi olacak?** Gerçek dünyada tahmin yaparken henüz oluşmamış sütunlar modele giremez (bkz. [03 · EDA ve Veri Sızıntısı Avı](03_eda_and_leakage.md)).
 
-## 2. Metrik seçimi
+### 2. Probleme uygun metrik seç
 
-| Durum | Metrik | Not |
-|-------|--------|-----|
-| Regresyon, büyük hatalar pahalı | RMSE | Uç değerlere duyarlı |
-| Regresyon, dayanıklılık | MAE | |
-| Regresyon, oransal hata / sağ çarpık hedef | RMSLE, MAPE | Hedefi log'layıp RMSE de olur |
-| Dengeli sınıflandırma | ROC-AUC, Log-Loss | Olasılık kalitesi önemliyse Log-Loss |
-| Dengesiz sınıflandırma | PR-AUC, F-beta | Accuracy tek başına kullanılmaz |
-| Çok sınıflı | Macro-F1, Log-Loss | Sınıf sayısı dengesizse macro |
+| Durum | Metrik | Neden? |
+|-------|--------|--------|
+| Regresyon (büyük hatalar kritik) | **RMSE** | Hataların karesini aldığı için büyük sapmaları sert cezalandırır, hedefle aynı birimdedir |
+| Regresyon (uç değerlere dirençli) | **MAE** | Ortalama mutlak sapmayı doğrudan verir, yorumlaması kolaydır |
+| Dengeli sınıflandırma | **Accuracy**, **ROC-AUC** | Sınıflar yaklaşık eşitse Accuracy anlamlıdır |
+| Dengesiz sınıflandırma | **F1**, **PR-AUC** | Örnek: verinin %95'i `0`, %5'i `1` ise her şeye `0` diyen aptal model %95 Accuracy alır ama F1=`0.00` olur |
+| Çok sınıflı sınıflandırma | **Macro-F1** | Her sınıfa eşit ağırlık verir; azınlık sınıfların gizlenmesini önler |
 
-Yarışma verisiyse yarışmanın metriğini kullan; veri seti projesinde kendin seç ve nedenini yaz.
+### 3. Baseline (referans model) kur
+Hiçbir özellik mühendisliği yapmadan en basit referans skoru çıkar; bundan sonraki her iyileştirme bu çıtayı geçmek zorundadır:
 
-## 3. Baseline
+```python
+from sklearn.dummy import DummyClassifier
+from sklearn.metrics import accuracy_score, f1_score
 
-- `DummyClassifier` / `DummyRegressor`: en sık sınıf veya ortalama.
-- Ham veriyle basit model: Ridge/Logistic veya hızlı bir LightGBM.
-- Skorları bir tabloya yaz, sonraki her adım bu tabloya satır ekler:
+# Her zaman en sık sınıfı tahmin eden referans model
+dummy = DummyClassifier(strategy="most_frequent")
+dummy.fit(X_train, y_train)
+y_dummy = dummy.predict(X_val)
 
-| Deney | CV skor | Fark |
-|-------|---------|------|
-| Dummy | | |
-| Ham veri + basit model | | |
-| + eksik değer işleme | | |
-| + feature engineering | | |
+print("Baseline Accuracy:", accuracy_score(y_val, y_dummy))
+print("Baseline F1      :", f1_score(y_val, y_dummy))
+```
 
-Bu tablo "geliştirilmiş çalışma"nın kanıtıdır.
+Deneylerini küçük bir tabloda takip et:
 
-## 4. Kendine sor
+| Deney | CV / Holdout Skor | Fark |
+|-------|-------------------|------|
+| Dummy (en sık sınıf / ortalama) | — | Referans |
+| İlk basit model (Linear / NB / RF) | — | — |
+| İyileştirilmiş pipeline | — | — |
 
-- Metriği iş bağlamında neden seçtim?
-- Baseline'ı geçmeyen adımı pipeline'a koydum mu?
+## İleri Seviye (İhtiyaç Olduğunda)
+
+- **Sağ çarpık regresyon hedefi:** Oransal hatalar önemliyse `RMSLE` veya `MAPE` kullan (veya hedefe `np.log1p(y)` uygulayıp `RMSE` ölç).
+- **Olasılık kalitesi:** Sadece sınıf etiketi değil, tahmin edilen olasılığın doğruluğu önemliyse `Log-Loss` veya `Brier Score` takip et.
+- **Maliyet duyarlı F-beta:** Yanlış negatif (ör. hastalığı kaçırmak) yanlış pozitiften daha pahalıysa Recall'a daha çok ağırlık veren `F2` (`beta=2`) kullan.
+
+## Kendine Sor
+
+- Seçtiğim metriği iş problemi açısından tek cümleyle savunabiliyor muyum?
+- Kurduğum model basit `Dummy` / majority baseline'ı gerçekten anlamlı farkla geçiyor mu?

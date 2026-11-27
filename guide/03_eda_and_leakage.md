@@ -1,44 +1,45 @@
 # 03 · EDA ve Veri Sızıntısı Avı
 
-Amaç: verinin hikayesini anlamak, sızıntıyı yakalamak, train/test farkını görmek.
+**Neden bu adım var?**
+Keşifsel Veri Analizi (EDA) sadece güzel grafik çizmek değildir; modellemede alacağın kararları (hangi sütunu atacağım, log dönüşümü gerekir mi, veri dengesiz mi?) kanıta bağlamak içindir. Aynı aşamada yapılan **veri sızıntısı (data leakage) avı**, testte %99 görünüp gerçek hayatta çöken modelleri baştan engeller.
 
-## 1. Hedef değişken analizi
+## Temel (Önce Bunu Uygula)
 
-**Regresyon**
-- `skew()` ve `kurtosis()` ölç. Sağ çarpıksa (`skew > 0.75`) ve hedef pozitifse `log1p` düşün.
-- Hedefin büyük kısmı `0` ise (zero-inflated) iki aşamalı model: önce `>0 mı?`, sonra tutar.
+### 1. Hedef değişkeni (target) incele
+- **Regresyon:** Histogram çiz ve `y.skew()` ölç. Ortalama medyandan çok büyükse ve `skew > 0.75` ise dağılım sağa çarpıktır (ör. ev veya uçak fiyatları).
+- **Sınıflandırma:** `y.value_counts(normalize=True)` ile sınıf oranlarına bak. Bir sınıf çok küçükse (ör. %10–15 altı) dengesiz veri stratejisine geç (bkz. [09](09_imbalance_and_pipeline.md)).
 
-**Sınıflandırma**
-- Sınıf oranları. Bir sınıf %1'in altındaysa aşırı dengesizlik, bkz. [09](09_imbalance_and_pipeline.md).
+### 2. Sütunların dağılımı ve hedefle ilişkisi
+- **Sayısal değişkenler:** Histogram ve boxplot ile uç değerlere bak; korelasyon matrisiyle hedefle en ilişkili sütunları gör (`df.corr(numeric_only=True)`).
+- **Kategorik değişkenler:** `value_counts()` ile sınıf dengesini ve nadir sınıfları gör; kategori bazlı hedef ortalamalarına bak (`df.groupby("Sex")["Survived"].mean()`).
 
-## 2. Tek değişkenli bakış
+### 3. Dört temel veri sızıntısı (Data Leakage) türü
+Her sütun için şu soruyu sor: **"Bu bilgi tahmin yapacağım anda gerçekten elimde olacak mı?"**
 
-- Sayısal: histogram, boxplot, `df.skew()`.
-- Kategorik: `value_counts()`, nadir sınıflar, kardinalite.
-- `mean ≈ median` simetri, `mean > median` sağ çarpıklık ipucu. Heuristiktir, sayıyı `skew()` ile doğrula.
+1. **Gelecekten gelen bilgi (Look-ahead Bias):** Tahmin anında henüz oluşmamış bilgi.
+   - *Gerçek örnek:* Banka telefon pazarlamasında `duration` (görüşme süresi) arama bitmeden bilinemez; arama öncesinde kimin abone olacağını tahmin ederken kullanılamaz.
+2. **Hedeften türetilmiş sütunlar:** Hedefin doğrudan bir formülü veya sıralaması.
+   - *Gerçek örnek:* Araç fiyat tahmininde `PriceRank` veya `PPY` (Price Per Year) doğrudan fiyattan hesaplanmıştır; çıkarılmalıdır.
+3. **Preprocessing sızıntısı (en yaygın hata):** `Imputer`, `Scaler`, `TfidfVectorizer` veya `get_dummies`'i `train_test_split` öncesinde tüm veriye uygulamak.
+```python
+# YANLIŞ: Tüm veriden öğrenip sonra bölmek (test bilgisi eğitime sızar)
+X_vec = tfidf.fit_transform(df["text"])
+X_train, X_test, y_train, y_test = train_test_split(X_vec, y, test_size=0.2)
 
-## 3. İki değişkenli bakış
+# DOĞRU: Önce böl, yalnızca X_train üzerinde fit et
+X_train, X_test, y_train, y_test = train_test_split(df["text"], y, test_size=0.2)
+X_train_vec = tfidf.fit_transform(X_train)
+X_test_vec  = tfidf.transform(X_test)
+```
+4. **Grup sızıntısı:** Aynı müşteri, hasta veya cihaza ait satırların hem eğitim hem doğrulama setine düşmesi (bkz. [04](04_splitting_and_validation.md)).
 
-- Sayısal–sayısal: Pearson (doğrusal), Spearman (monotonik).
-- Çoklu doğrusallık: `|r| > 0.85` veya VIF > 10. Doğrusal modellerde sorun, ağaçlarda yorumlanabilirliği böler.
-- Kategorik–hedef: grup bazlı hedef ortalaması / oranı.
+## İleri Seviye (İhtiyaç Olduğunda)
 
-## 4. Sızıntı (leakage) kontrolü
+- **Çoklu doğrusallık (Multicollinearity):** İki özellik arasında `|r| > 0.85` veya `VIF > 10` olması doğrusal modellerde katsayıları kararsızlaştırır; ağaç modellerinde tahmini bozmaz ama özellik önemini (feature importance) iki sütuna böler.
+- **Sıfır yığılmalı (Zero-Inflated) hedef:** Regresyon hedefinin büyük bölümü tam `0` ise (ör. sigorta hasar tutarı) iki aşamalı model kur: (1) `> 0 mı?` sınıflandırma, (2) `> 0` olanlarda tutar tahmini.
+- **Adversarial Validation:** Ayrı bir yarışma test seti varsa `train=0`, `test=1` etiketleyip basit bir sınıflandırıcı eğit. `ROC-AUC ≈ 0.50` ise dağılımlar benzerdir; `> 0.75` ise dağılım kayması (covariate shift) vardır.
 
-1. **Gelecekten gelen bilgi:** tahmin anında elimde olmayacak sütun.
-2. **Gerçek olamayacak kadar güçlü özellik:** hedefle `|r| > 0.9` veya tek başına neredeyse mükemmel skor.
-3. **Grup sızıntısı:** aynı kişi/cihaz hem train hem validation'da.
-4. **Preprocessing sızıntısı:** tüm veride `fit` edilen scaler/imputer/encoder. En sık yapılan hatadır.
+## Kendine Sor
 
-Kural: her sütun için "bu bilgi tahmin anında var mı?" diye sor.
-
-## 5. Adversarial validation (ayrı test seti varsa)
-
-Train = 0, test = 1 etiketiyle birleştir, sınıflandırıcı eğit.
-- ROC-AUC ≈ 0.5: dağılım aynı.
-- ROC-AUC > 0.75: covariate shift. Önem skoru en yüksek sütunlar (genelde `ID`, tarih) kaymanın kaynağıdır.
-
-## Kendine sor
-
-- EDA'dan hangi üç karar çıktı (log dönüşümü, sütun atma, encoding seçimi gibi)?
-- Sızıntı şüphesi olan sütun var mıydı, nasıl doğruladım?
+- EDA sonucunda aldığım 2–3 somut karar (sütun atma, log dönüşümü, metrik seçimi gibi) neler?
+- Hedefle şüpheli derecede yüksek ilişkili (`|r| > 0.90`) veya tahmin anında bilinemeyecek bir sütun var mı?

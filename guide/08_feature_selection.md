@@ -1,30 +1,39 @@
 # 08 · Özellik Seçimi ve Boyut İndirgeme
 
-Amaç: gürültüyü azaltmak, overfitting'i engellemek, eğitimi hızlandırmak. Her eleme CV ile doğrulanır; skor düşüyorsa eleme yapılmaz.
+**Neden bu adım var?**
+Veride ne kadar çok sütun varsa model o kadar iyi olur diye bir kural yoktur. Hedefle ilgisiz veya birbirinin kopyası sütunlar modelin gürültüyü ezberlemesine (overfitting) ve eğitim süresinin uzamasına neden olur. Özellik seçimi, yalnızca gerçekten sinyal taşıyan sütunları tutarak modeli sadeleştirir ve genelleme gücünü artırır.
 
-## Eleme hunisi
+> **Altın kural:** Her sütun eleme kararı CV skoruyla doğrulanır. Eleme sonrası CV skoru düşüyorsa o sütun geri alınır.
 
-1. **Filtre (hızlı)**
-   - `VarianceThreshold`.
-   - Birbirine çok benzeyen sütunlardan (`|r| > 0.98`) hedefle ilişkisi zayıf olanı at.
-2. **Gömülü yöntemler**
-   - L1 (Lasso) katsayıları sıfırlananları ele.
-   - Hızlı LightGBM ile gain'i 0 olanları ele.
-3. **Permutation importance (validation üzerinde)**
-   - Sütunu karıştırınca skor düşmüyorsa veya artıyorsa sütun gürültüdür.
-   - Ağaçların yerleşik önemi yüksek kardinaliteli sütunlara yanlıdır, o yüzden tek başına yetmez.
-4. **SHAP**
-   - Hem önem hem yön. İş mantığına ters veya sızıntıya benzeyen özellikleri yakalar.
-5. **Gölge özellik (Boruta / null importance)**
-   - Karıştırılmış kopyalardan daha önemli olmayan özelliği ele.
+## Temel (Önce Bunu Uygula)
 
-## Boyut indirgeme
+### 1. Hızlı temel eleme
+- **Sabit sütunlar:** Varyansı sıfır olan (`nunique == 1`) sütunları çıkar.
+- **İkiz sütunlar:** Birbiriyle korelasyonu `|r| > 0.98` olan iki sütundan hedefle ilişkisi daha zayıf olanı ele.
 
-- PCA: scaling sonrası, `fit` sadece train. Yorumlanabilirliği düşürür.
-- Metin: `TruncatedSVD` (LSA).
-- Görselleştirme için t-SNE/UMAP; modelde girdi olarak kullanmadan önce dikkat.
+### 2. Permutation Importance (Validation üzerinde en güvenilir temel test)
+Doğrulama setinde bir sütunun değerlerini rastgele karıştırıp skorun ne kadar düştüğüne bakar:
+- Skor **çok düşüyorsa** → sütun model için çok önemlidir.
+- Skor **değişmiyorsa veya artıyorsa** → sütun gürültüdür, elemeyi dene.
 
-## Kendine sor
+```python
+from sklearn.inspection import permutation_importance
 
-- Elenen sütunlar listesi ve CV skoruna etkisi?
-- Elediğim sütun alan bilgisi açısından önemliydi mi?
+result = permutation_importance(pipe, X_val, y_val, n_repeats=5, random_state=42, scoring="f1")
+for col, imp in sorted(zip(X_val.columns, result.importances_mean), key=lambda x: -x[1])[:10]:
+    print(f"{col:25s}: {imp:.4f}")
+```
+
+*(Neden ağaçların yerleşik `feature_importances_` değeri tek başına yetmez? Çünkü ağaç bölünmeleri çok fazla benzersiz değere sahip sütunları yapay olarak daha önemli göstermeye eğilimlidir.)*
+
+## İleri Seviye (İhtiyaç Olduğunda)
+
+- **Gömülü yöntemler:** `Lasso` (L1 regularizasyon) gereksiz özellik katsayılarını tam sıfıra indirir; hızlı bir `LightGBM` ile `gain == 0` olan sütunlar elenebilir.
+- **SHAP değerleri:** Her özelliğin tahmini yalnızca ne kadar değil, **hangi yönde** (artırıcı/azaltıcı) etkilediğini gösterir; iş mantığına ters sızıntı özelliklerini yakalamada çok etkilidir.
+- **Gölge özellik testi (Boruta / Null Importance):** Sütunların karıştırılmış sahte kopyalarından daha düşük önem alan gerçek sütunları eler.
+- **Boyut indirgeme:** Yoğun sayısal veride `PCA` (scaling sonrası, yalnızca `train`'e fit), seyrek TF-IDF matrislerinde `TruncatedSVD` (LSA). Görselleştirme için `t-SNE` / `UMAP` kullanılır (doğrudan model girdisi olarak önerilmez).
+
+## Kendine Sor
+
+- Elediğim sütunların listesi ve eleme öncesi/sonrası CV skoru farkı nedir?
+- Yüksek önem gösteren bir sütun gerçekten iş mantığına uygun mu, yoksa gözden kaçan bir sızıntı mı?

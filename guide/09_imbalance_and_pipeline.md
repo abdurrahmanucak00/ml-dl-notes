@@ -1,21 +1,19 @@
 # 09 · Sınıf Dengesizliği, Eşik ve Pipeline
 
-## A. Dengesizlik
+**Neden bu adım var?**
+Gerçek dünya sınıflandırma problemlerinde (dolandırıcılık, hastalık tespiti, abonelik tahmini) ilgilendiğimiz pozitif sınıf genelde çok azdır (%1–%15). Standart modeller çoğunluk sınıfına odaklanıp azınlık sınıfını gözden kaçırır. İkinci olarak, tüm ön işleme adımlarını tek bir `Pipeline` içinde toplamak, hem CV sırasında veri sızıntısını imkansız hale getirir hem de canlı veride aynı adımların eksiksiz çalışmasını garanti eder.
 
-> Resampling **sadece CV içinde train fold'a** uygulanır. Validation/test gerçek dağılımda kalır.
+## Temel (Önce Bunu Uygula)
 
-Müdahale sırası (en güvenliden en riskliye):
+### A. Sınıf Dengesizliğine Müdahale Sırası (En Güvenliden En Riskliye)
+1. **Doğru metrik + Baseline:** Accuracy'ye değil `F1`, `Recall`, `PR-AUC` metriklerine bak; majority baseline'ı hesapla.
+2. **Maliyet duyarlı ağırlıklandırma (ilk tercih):** Veriyi bozmadan azınlık sınıfı hatalarını daha ağır cezalandır:
+   - Scikit-learn modelleri: `class_weight="balanced"`
+   - XGBoost: `scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()` *(DİKKAT: yalnızca `y_train`'den hesaplanır!)*
+   - LightGBM: `is_unbalance=True` veya `scale_pos_weight`
 
-1. **Hiçbir şey yapma + doğru metrik:** orta dengesizlikte (%15–85) ağaç modeliyle PR-AUC / Log-Loss.
-2. **Maliyet duyarlı öğrenme:** `class_weight="balanced"`, XGBoost `scale_pos_weight = neg/pos`, LightGBM `is_unbalance` / `scale_pos_weight`.
-3. **Eşik optimizasyonu:** OOF olasılıklarda precision-recall eğrisini tara; iş hedefine göre F1/F2 veya maliyet minimum olan eşiği seç. Varsayılan 0.5 dengesiz veride genelde yanlıştır.
-4. **SMOTE / undersampling:** son çare. Yüksek boyutta SMOTE gürültü üretebilir. Undersampling sonrası olasılıkları kalibre et.
-
-Metrikler: PR-AUC, F-beta, recall@precision, confusion matrix. Accuracy tek başına yanıltır.
-
-## B. Pipeline
-
-Tüm adımları `Pipeline` + `ColumnTransformer` içine koy:
+### B. Tüm Adımları Tek `Pipeline` İçinde Birleştir
+`ColumnTransformer` sayısal ve kategorik sütunları ayrı işler; `Pipeline` ise ön işlemeyi modele bağlar:
 
 ```python
 from sklearn.pipeline import Pipeline
@@ -24,24 +22,36 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.linear_model import LogisticRegression
 
-num = Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())])
-cat = Pipeline([("imp", SimpleImputer(strategy="constant", fill_value="None")),
-                ("oh", OneHotEncoder(handle_unknown="ignore"))])
-pre = ColumnTransformer([("num", num, num_cols), ("cat", cat, cat_cols)])
-pipe = Pipeline([("pre", pre), ("model", LogisticRegression(max_iter=1000))])
+num_pipe = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler",  StandardScaler())
+])
+cat_pipe = Pipeline([
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(handle_unknown="ignore"))
+])
+
+preprocessor = ColumnTransformer([
+    ("num", num_pipe, num_cols),
+    ("cat", cat_pipe, cat_cols)
+])
+
+pipe = Pipeline([
+    ("preprocessor", preprocessor),
+    ("model", LogisticRegression(max_iter=1000, class_weight="balanced"))
+])
 ```
 
-Faydası: CV içinde `fit(train)`/`transform(val)` ayrımı otomatik, tek `.joblib` ile kaydedilir.
+**Pipeline'ın 2 büyük faydası:**
+1. `cross_val_score` ve `GridSearchCV` içinde her fold için `fit(train)` / `transform(val)` ayrımını otomatik yapar — leakage riskini sıfırlar.
+2. Tek bir nesne olarak kaydedilir (bkz. [11 · Hata Analizi ve Model Kaydetme](11_error_analysis_and_export.md)).
 
-## C. Bitirmeden önce
+## İleri Seviye (İhtiyaç Olduğunda)
 
-- [ ] Tüm veride `.fit()`, `.mean()`, `get_dummies()` çağrısı yok
-- [ ] Bilinmeyen kategori ve beklenmedik `NaN` pipeline'ı çökertmiyor
-- [ ] Oran özelliklerinde sıfıra bölme korunmuş
-- [ ] Olasılıklar karar için kullanılacaksa kalibrasyon (Brier, calibration curve) bakıldı
-- [ ] Hata analizi: model en çok hangi örneklerde yanılıyor?
+- **Karar eşiği optimizasyonu (Threshold Tuning):** Modeller varsayılan olarak `0.50` olasılık eşiğini kullanır; dengesiz veride bu nadiren optimaldir. OOF olasılıkları (`predict_proba`) üzerinde Precision–Recall eğrisini tarayarak maksimum F1 veya iş maliyetini minimize eden eşiği (ör. `0.22`) seç.
+- **SMOTE / Undersampling (son çare):** Yeniden örnekleme **yalnızca CV döngüsü içindeki train fold'a** uygulanır (`imblearn.pipeline.Pipeline` ile). Doğrulama ve test setleri her zaman gerçek dağılımında kalır. Undersampling sonrası olasılık kalibrasyonu (`CalibratedClassifierCV`) kontrol edilmelidir.
 
-## Kendine sor
+## Kendine Sor
 
-- Dengesizlik gerçekten sorun muydu? Önce hiçbir şey yapmadan skora baktım mı?
-- Eşiği hangi iş hedefine göre seçtim?
+- `scale_pos_weight` veya `SMOTE` gibi işlemleri yalnızca `train` verisi üzerinde mi uyguladım?
+- Eğitimde çıkardığım `id` gibi sütunları tahmin anında gelen test verisinden de çıkarıyor muyum (veya `ColumnTransformer` bunları güvenle düşürüyor mu)?

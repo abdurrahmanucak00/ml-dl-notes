@@ -1,53 +1,54 @@
 # 05 · Eksik Değer ve Aykırı Değer
 
-Tüm istatistikler (median, sınır, quantile) **sadece train'den** hesaplanır.
+**Neden bu adım var?**
+Çoğu klasik algoritma (`LinearRegression`, `LogisticRegression`, `SVM`, `KNN`) eksik (`NaN`) değerlerle hiç çalışmaz ve tek bir uç değer (`Fiyat = 100 milyon`) doğrusal regresyon çizgisini tamamen bozabilir. Ancak her eksik değeri körü körüne ortalamayla doldurmak ya da her uç değeri silmek de verideki gerçek sinyali yok eder.
 
-## A. Eksik değer
+> **Altın kural:** Ortalama, medyan, mod ve uç değer sınırları **yalnızca `X_train`'den hesaplanır**, ardından `X_val` ve `X_test`'e uygulanır.
 
-### 1. Mekanizmayı teşhis et
-- **MCAR:** eksiklik hiçbir şeye bağlı değil.
-- **MAR:** başka bir gözlenen değişkene bağlı.
-- **MNAR:** eksikliğin kendisi değerin bilgisini taşıyor.
+## Temel (Önce Bunu Uygula)
 
-Ayrıca bak: hangi sütunlar **birlikte** eksik? (Aynı sayıda dolu olan sütun grupları genelde aynı nedene bağlıdır, örneğin "garaj yok" → tüm garaj sütunları eksik.)
+### A. Eksik Değer (Imputation)
 
-### 2. Karar matrisi
+1. **Önce eksikliğin anlamını sor:**
+   - **Yapısal eksiklik ("yok" anlamında):** Örneğin bir evin garajı yoksa `GarageArea = NaN` olur → medyanla değil `0` veya `"None"` ile doldur.
+   - **Gerçekten bilinmeyen değer:** Aşağıdaki tabloyu kullan.
 
-| Durum | Yöntem |
-|-------|--------|
-| NaN = "yok" anlamında (yapısal) | Mantıksal değer: `"None"`, `0`, `-1` |
-| MNAR şüphesi, eksik oranı > %5 | Doldurmadan önce `col_is_missing` göstergesi ekle |
-| Sayısal, simetrik | Mean |
-| Sayısal, çarpık / uç değerli | Median |
-| Kategorik | Mode veya ayrı `"Missing"` sınıfı |
-| Gruplar arası fark büyük | Grup medyanı (train'den) |
-| Değişkenler güçlü ilişkili | `KNNImputer` / `IterativeImputer` (ölçekleme gerekir, pahalı) |
-| LightGBM / XGBoost / CatBoost | NaN'i olduğu gibi bırakmak da bir seçenek, CV ile karşılaştır |
+| Sütun Tipi / Durumu | Önerilen Yöntem | Neden? |
+|---------------------|-----------------|--------|
+| Sayısal, simetrik dağılım | **Mean** (ortalama) | Uç değer yoksa dağılımı korur |
+| Sayısal, çarpık veya uç değerli | **Median** (medyan) | Uç değerlerden etkilenmez (en güvenli varsayılan) |
+| Kategorik | **Mode** veya `"Missing"` sınıfı | `"Missing"` sınıfı eksikliğin kendisini de modele sinyal olarak verir |
+| XGBoost / LightGBM / CatBoost | Olduğu gibi bırakmayı CV ile dene | Modern ağaç modelleri `NaN` değerleri doğal olarak yönlendirebilir |
 
-Sütun %50+ eksikse: at, ya da sadece `is_missing` göstergesini tut. Ama önce eksikliğin sinyal taşıyıp taşımadığına bak.
+```python
+from sklearn.impute import SimpleImputer
 
-## B. Aykırı değer
+# DOĞRU: İstatistiği yalnızca X_train'den öğren
+num_imputer = SimpleImputer(strategy="median")
+X_train_num = num_imputer.fit_transform(X_train[num_cols])
+X_val_num   = num_imputer.transform(X_val[num_cols])
+```
 
-### 1. Tespit
-- Normal dağılım: Z-score (`|z| > 3`).
-- Çarpık dağılım: IQR (`Q1 - 1.5 IQR`, `Q3 + 1.5 IQR`) veya MAD.
-- Çok değişkenli: Isolation Forest, LOF, Mahalanobis.
-- Görsel: boxplot, scatter (örn. alan–fiyat grafiğinde kopan noktalar).
+### B. Aykırı Değer (Outlier)
 
-### 2. Sinyal mi hata mı?
-Uç değer veri giriş hatası olabilir (`yaş = 250`) ya da gerçek ve önemli olabilir (dolandırıcılık). Alan bilgisiyle karar ver.
+1. **Önce tespit et:** Histogram, boxplot veya **IQR kuralı** (`Q1 - 1.5*IQR` altı ve `Q3 + 1.5*IQR` üstü).
+2. **Hata mı, gerçek sinyal mi?** `Yas = 250` kesin veri giriş hatasıdır; ancak lüks bir uçağın çok pahalı olması veya yüksek tutarlı bir kredi kartı harcaması (dolandırıcılık) **gerçek sinyaldir**.
+3. **Model ailesine göre hareket et:**
+   - **Ağaç modelleri (RF, XGBoost, LightGBM):** Kesin veri hatası dışında dokunma; ağaçlar eşik değerleriyle böldüğü için uç değerlerden çok az etkilenir.
+   - **Doğrusal modeller, KNN, SVM, Sinir Ağları:** Uç değerlere çok duyarlıdır. Sınırlandırma (`clip` / Winsorization) veya `log1p` dönüşümü uygula.
+   - **Test setinden asla satır silme:** Satır silme yalnızca eğitim setinde ve kanıtlanmış hatalarda yapılır.
 
-### 3. Müdahale (model ailesine göre)
+## İleri Seviye (İhtiyaç Olduğunda)
 
-| Model | Yaklaşım |
-|-------|----------|
-| Ağaç tabanlı | Kesin hata dışında dokunma |
-| Doğrusal, KNN, SVM, NN | Winsorization (`np.clip`, train quantile'larıyla), log/Yeo-Johnson/Quantile dönüşümü |
+- **Eksiklik mekanizmaları:**
+  - *MCAR (Tamamen rastgele):* Sensör anlık kopması.
+  - *MAR (Başka sütuna bağlı):* Genç kullanıcıların gelir alanını daha az doldurması.
+  - *MNAR (Kendi değerine bağlı):* Çok yüksek gelirlilerin gelirini gizlemesi → doldurmadan önce `col_is_missing` (`0/1`) göstergesi ekle (`SimpleImputer(add_indicator=True)`).
+- **Grup bazlı ve çok değişkenli doldurma:** Genel medyan yerine `train`'den hesaplanan grup medyanı veya `KNNImputer` / `IterativeImputer` (ölçekleme gerektirir, büyük veride yavaştır).
+- **Çok değişkenli uç değer tespiti:** Tek başına normal görünüp kombinasyonu imkansız satırlar (`Yas = 19`, `Deneyim = 15 yıl`) için `IsolationForest` veya `LocalOutlierFactor`.
+- **Dağılım dönüşümleri:** Pozitif sağ çarpık veride `np.log1p`, sıfır/negatif içeren çarpık veride `PowerTransformer(method="yeo-johnson")`.
 
-- Satır silme sadece train'de ve hata olduğu kanıtlandıysa. **Test'ten asla satır silinmez.**
-- Pozitif sağ çarpık: `log1p` / Box-Cox. Sıfır/negatif içeren: Yeo-Johnson.
+## Kendine Sor
 
-## Kendine sor
-
-- Eksiklik rastgele mi, bilgi mi taşıyor? Neyle doğruladım?
-- Hangi uç değerleri tuttum, hangilerini neden çıkardım?
+- Eksik değerleri `train_test_split` sonrasında, yalnızca `X_train` istatistikleriyle mi doldurdum?
+- Çıkardığım veya sınırlandırdığım uç değerler gerçekten hata mıydı, yoksa modelin öğrenmesi gereken gerçek uç vakalar mıydı?
